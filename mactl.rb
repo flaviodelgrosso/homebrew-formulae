@@ -2,6 +2,7 @@ class Mactl < Formula
   desc "Manage local macOS virtual machines on Apple Silicon"
   homepage "https://github.com/flaviodelgrosso/mactl"
   license "GPL-3.0-or-later"
+
   head "https://github.com/flaviodelgrosso/mactl.git", branch: "main"
 
   depends_on "rust" => :build
@@ -17,6 +18,10 @@ class Mactl < Formula
            "--entitlements", "packaging/entitlements.plist", bin/"mactl"
   end
 
+  def post_install
+    (var/"log/mactl").mkpath
+  end
+
   service do
     run [opt_bin/"mactl", "internal", "daemon-foreground"]
     keep_alive true
@@ -25,9 +30,9 @@ class Mactl < Formula
   end
 
   test do
+    assert_path_exists bin/"mactl"
     assert_match "mactl", shell_output("#{bin}/mactl --version")
 
-    assert_path_exists bin/"mactl"
     entitlements = shell_output("/usr/bin/codesign -d --entitlements :- #{bin}/mactl 2>&1")
     assert_match "com.apple.security.virtualization", entitlements
   end
