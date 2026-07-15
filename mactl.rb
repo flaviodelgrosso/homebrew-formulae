@@ -18,19 +18,7 @@ class Mactl < Formula
            "--entitlements", "packaging/entitlements.plist", bin/"mactl"
   end
 
-  def post_install
-    (var/"log/mactl").mkpath
-  end
-
-  service do
-    run [opt_bin/"mactl", "internal", "daemon-foreground"]
-    keep_alive true
-    log_path var/"log/mactl/mactl.log"
-    error_log_path var/"log/mactl/mactl.err.log"
-  end
-
   test do
-    assert_path_exists bin/"mactl"
     assert_match "mactl", shell_output("#{bin}/mactl --version")
 
     entitlements = shell_output("/usr/bin/codesign -d --entitlements :- #{bin}/mactl 2>&1")
