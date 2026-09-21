@@ -1,8 +1,8 @@
 class Lumen < Formula
   desc "Stream your display to browsers on the LAN"
   homepage "https://github.com/flaviodelgrosso/lumen"
-  url "https://github.com/flaviodelgrosso/lumen/releases/download/v0.1.7/lumen-v0.1.7-aarch64-apple-darwin.tar.gz"
-  sha256 "4bb11e78026f7f8a7d3e40f72983420ac7aee9e7d378416a654384b90edf182c"
+  url "https://github.com/flaviodelgrosso/lumen/releases/download/v0.1.8/lumen-v0.1.8-aarch64-apple-darwin.tar.gz"
+  sha256 "41b294dc4a86cda1d1d3a7aef919042254931dd4fbd7fedd28c5db8eb0034b78"
   license "MIT"
 
   depends_on arch: :arm64
