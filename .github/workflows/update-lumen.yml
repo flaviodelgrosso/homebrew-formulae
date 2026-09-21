@@ -1,0 +1,167 @@
+name: Update Lumen
+
+on:
+  schedule:
+    # Poll the latest Lumen release; a no-op unless the formula is behind.
+    - cron: "0 * * * *"
+  repository_dispatch:
+    types: [lumen-release]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-lumen
+  cancel-in-progress: false
+
+env:
+  REPO: flaviodelgrosso/lumen
+  TAP: flaviodelgrosso/formulae
+  FORMULA: lumen.rb
+
+jobs:
+  update:
+    name: Bump formula to latest release
+    runs-on: macos-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout tap
+        uses: actions/checkout@v7
+
+      - name: Check latest Lumen release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          json=$(gh api "repos/$REPO/releases/latest")
+          tag=$(echo "$json" | jq -r '.tag_name')
+          version=${tag#v}
+          asset="lumen-v${version}-aarch64-apple-darwin.tar.gz"
+          url=$(echo "$json" | jq -r --arg a "$asset" '.assets[] | select(.name == $a) | .browser_download_url' | head -n1)
+          if [ -z "$url" ] || [ "$url" = "null" ]; then
+            echo "::notice::$tag carries no $asset; nothing to do"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sums_url=$(echo "$json" | jq -r '.assets[] | select(.name == "SHA256SUMS") | .browser_download_url' | head -n1)
+          current=""
+          if [ -f "$FORMULA" ]; then
+            current=$(sed -nE 's@^  url "https://github.com/[^"]*/download/v([^/]+)/.*@\1@p' "$FORMULA" | head -n1)
+          fi
+          if [ "$current" = "$version" ]; then
+            echo "::notice::formula already tracks $version"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "sums_url=$sums_url" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "Formula tracks '${current:-<none>}'; latest release is $version"
+
+      - name: Fetch binary and verify release checksum
+        id: checksum
+        if: steps.release.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.release.outputs.version }}"
+          url="${{ steps.release.outputs.url }}"
+          sums_url="${{ steps.release.outputs.sums_url }}"
+          asset="lumen-v${version}-aarch64-apple-darwin.tar.gz"
+          curl -fsSL "$url" -o "$RUNNER_TEMP/$asset"
+          actual=$(shasum -a 256 "$RUNNER_TEMP/$asset" | awk '{print $1}')
+          if [ -n "$sums_url" ] && [ "$sums_url" != "null" ]; then
+            curl -fsSL "$sums_url" -o "$RUNNER_TEMP/SHA256SUMS"
+            expected=$(awk -v a="$asset" '$2 == a {print $1}' "$RUNNER_TEMP/SHA256SUMS")
+            if [ -z "$expected" ]; then
+              echo "::error::SHA256SUMS asset carries no entry for $asset"
+              exit 1
+            fi
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::checksum mismatch: release SHA256SUMS says $expected, downloaded tarball hashes to $actual"
+              exit 1
+            fi
+            echo "Checksum $actual matches the release SHA256SUMS."
+          else
+            echo "::warning::release publishes no SHA256SUMS asset; using the locally computed checksum"
+          fi
+          echo "sha256=$actual" >> "$GITHUB_OUTPUT"
+
+      - name: Update formula
+        if: steps.release.outputs.skip != 'true'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          URL: ${{ steps.release.outputs.url }}
+          SHA256: ${{ steps.checksum.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          if [ -f "$FORMULA" ]; then
+            sed -i '' -E \
+              -e "s@^  url \".*\"@  url \"$URL\"@" \
+              -e "s@^  sha256 \".*\"@  sha256 \"$SHA256\"@" \
+              "$FORMULA"
+          else
+            cat > "$FORMULA" <<EOF
+          class Lumen < Formula
+            desc "Stream your display to browsers on the LAN"
+            homepage "https://github.com/$REPO"
+            url "$URL"
+            sha256 "$SHA256"
+            license "MIT"
+
+            depends_on arch: :arm64
+            depends_on macos: :ventura
+
+            def install
+              bin.install "lumen"
+            end
+
+            test do
+              assert_match "lumen #{version}", shell_output("#{bin}/lumen --version")
+            end
+          end
+          EOF
+          fi
+          grep -qF "$URL" "$FORMULA"
+          grep -qF "$SHA256" "$FORMULA"
+          cat "$FORMULA"
+
+      - name: Validate with Homebrew
+        if: steps.release.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ANALYTICS=1
+          brew tap "$TAP"
+          tapdir=$(brew tap-info --json "$TAP" | jq -r '.[0].path')
+          cp "$FORMULA" "$tapdir/lumen.rb"
+          brew audit --strict --online "$TAP/lumen"
+          brew install "$TAP/lumen"
+          brew test "$TAP/lumen"
+          "$(brew --prefix "$TAP/lumen")/bin/lumen" --version
+
+      - name: Open bump pull request
+        if: steps.release.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          branch="bump/lumen-${VERSION}"
+          if gh pr list --head "$branch" --state open --json number | grep -q '"number"'; then
+            echo "::notice::PR for $branch already open"
+            exit 0
+          fi
+          git checkout -b "$branch"
+          git add "$FORMULA"
+          git commit -m "lumen ${VERSION}"
+          git push origin "$branch"
+          gh pr create \
+            --head "$branch" \
+            --title "lumen ${VERSION}" \
+            --body "Automated bump: \`$FORMULA\` now installs \`lumen-v${VERSION}-aarch64-apple-darwin\` from the official [Lumen release](https://github.com/$REPO/releases/tag/v${VERSION}). The SHA-256 was verified against the release \`SHA256SUMS\` asset, and the formula passed \`brew audit --strict\`, \`brew install\` and \`brew test\` on a macOS arm64 runner."
