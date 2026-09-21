@@ -1,9 +1,6 @@
 name: Update Lumen
 
 on:
-  schedule:
-    # Poll the latest Lumen release; a no-op unless the formula is behind.
-    - cron: "0 * * * *"
   repository_dispatch:
     types: [lumen-release]
   workflow_dispatch:
